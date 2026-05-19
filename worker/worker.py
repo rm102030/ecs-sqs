@@ -2,15 +2,17 @@ import json
 import time
 import boto3
 
+from datetime import datetime
+
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
-# ==============================
+# =========================================================
 # OpenTelemetry
-# ==============================
+# =========================================================
 
 resource = Resource.create({
     "service.name": "worker-service"
@@ -31,9 +33,9 @@ trace.set_tracer_provider(provider)
 
 tracer = trace.get_tracer(__name__)
 
-# ==============================
+# =========================================================
 # AWS Clients
-# ==============================
+# =========================================================
 
 print("Iniciando worker...")
 
@@ -57,25 +59,29 @@ dynamodb = boto3.resource(
 
 print("Cliente DynamoDB creado")
 
-table = dynamodb.Table("notifications-idempotency")
+table = dynamodb.Table(
+    "notifications-idempotency"
+)
 
-queue_url = None
+# =========================================================
+# Queue URL
+# =========================================================
 
-# ==============================
-# Esperar cola normal
-# ==============================
+queue_name = "notifications"
 
-while not queue_url:
+while True:
 
     try:
 
         response = sqs.get_queue_url(
-            QueueName="notifications"
+            QueueName=queue_name
         )
 
         queue_url = response["QueueUrl"]
 
         print(f"Cola encontrada: {queue_url}")
+
+        break
 
     except Exception as e:
 
@@ -86,130 +92,132 @@ while not queue_url:
 
 print("Worker iniciado correctamente")
 
-# ==============================
-# Worker Loop
-# ==============================
+# =========================================================
+# Main Loop
+# =========================================================
 
 while True:
 
     try:
 
-        print("\nConsultando mensajes SQS...")
+        print()
+        print("Consultando mensajes SQS...")
 
-        response = sqs.receive_message(
+        messages = sqs.receive_message(
             QueueUrl=queue_url,
             MaxNumberOfMessages=1,
             WaitTimeSeconds=5
         )
 
-        messages = response.get("Messages", [])
-
-        if not messages:
+        if "Messages" not in messages:
 
             print("No hay mensajes disponibles")
+
             continue
 
-        for message in messages:
+        message = messages["Messages"][0]
 
-            body = json.loads(message["Body"])
+        body = json.loads(
+            message["Body"]
+        )
 
-            # ==============================
-            # Ignorar mensajes ERROR
-            # ==============================
+        print()
+        print("==============================")
+        print("MENSAJE RECIBIDO")
+        print("==============================")
+        print(f"eventId: {body['eventId']}")
+        print(f"correlationId: {body['correlationId']}")
+        print(f"channel: {body['channel']}")
+        print(f"recipient: {body['recipient']}")
+        print(f"message: {body['message']}")
 
-            if body.get("channel") == "ERROR":
+        # =================================================
+        # Validación idempotencia
+        # =================================================
 
-                print("\nMensaje ignorado")
-                print("Pertenece al flujo ERROR")
+        existing = table.get_item(
+            Key={
+                "eventId": body["eventId"]
+            }
+        )
 
-                sqs.delete_message(
-                    QueueUrl=queue_url,
-                    ReceiptHandle=message["ReceiptHandle"]
-                )
+        # =================================================
+        # Evento duplicado
+        # =================================================
 
-                continue
+        if "Item" in existing:
 
-            # ==============================
-            # Crear span SOLO para EMAIL
-            # ==============================
+            print()
+            print("Evento duplicado detectado")
+            print("Mensaje ignorado")
 
-            with tracer.start_as_current_span(
-                "worker-process-message"
-            ):
-
-                print("\n==============================")
-                print("MENSAJE RECIBIDO")
-                print("==============================")
-
-                print(f"eventId: {body.get('eventId')}")
-                print(f"correlationId: {body.get('correlationId')}")
-                print(f"channel: {body.get('channel')}")
-                print(f"recipient: {body.get('recipient')}")
-                print(f"message: {body.get('message')}")
-
-                # ==============================
-                # Idempotencia
-                # ==============================
-
-                existing = table.get_item(
-                    Key={
-                        "eventId": body["eventId"]
-                    }
-                )
-
-                if "Item" in existing:
-
-                    print("\nEvento duplicado detectado")
-                    print("Mensaje ignorado")
-
-                    sqs.delete_message(
-                        QueueUrl=queue_url,
-                        ReceiptHandle=message["ReceiptHandle"]
+            table.update_item(
+                Key={
+                    "eventId": body["eventId"]
+                },
+                UpdateExpression="""
+                    SET duplicateCount =
+                    if_not_exists(duplicateCount, :zero) + :inc,
+                    lastDuplicateAt = :timestamp
+                """,
+                ExpressionAttributeValues={
+                    ":inc": 1,
+                    ":zero": 0,
+                    ":timestamp": datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
                     )
+                }
+            )
 
-                    continue
+            sqs.delete_message(
+                QueueUrl=queue_url,
+                ReceiptHandle=message["ReceiptHandle"]
+            )
 
-                # ==============================
-                # Simulación procesamiento
-                # ==============================
+            continue
 
-                print(f"\nProcesando {body.get('channel')} provider...")
+        # =================================================
+        # Procesamiento normal
+        # =================================================
 
-                time.sleep(2)
+        with tracer.start_as_current_span(
+            "worker-process-message"
+        ):
 
-                print(f"{body.get('channel')} enviado correctamente")
+            print()
+            print("Procesando EMAIL provider...")
 
-                # ==============================
-                # Persistencia DynamoDB
-                # ==============================
+            time.sleep(2)
 
-                table.put_item(
-                    Item={
-                        "eventId": body["eventId"],
-                        "correlationId": body["correlationId"],
-                        "channel": body["channel"],
-                        "status": "PROCESSED",
-                        "createdAt": body["createdAt"],
-                        "processedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ")
-                    }
-                )
+            print("EMAIL enviado correctamente")
 
-                print("Evento PROCESSED almacenado en DynamoDB")
+            table.put_item(
+                Item={
+                    "eventId": body["eventId"],
+                    "correlationId": body["correlationId"],
+                    "channel": body["channel"],
+                    "status": "PROCESSED",
+                    "duplicateCount": 0,
+                    "createdAt": body["createdAt"],
+                    "processedAt": datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    )
+                }
+            )
 
-                # ==============================
-                # ACK SQS
-                # ==============================
+            print("Evento almacenado en DynamoDB")
 
-                sqs.delete_message(
-                    QueueUrl=queue_url,
-                    ReceiptHandle=message["ReceiptHandle"]
-                )
+            sqs.delete_message(
+                QueueUrl=queue_url,
+                ReceiptHandle=message["ReceiptHandle"]
+            )
 
-                print("Mensaje eliminado de SQS")
+            print("Mensaje eliminado de SQS")
 
     except Exception as e:
 
-        print("\nERROR EN WORKER")
+        print()
+        print("ERROR EN WORKER")
         print(e)
 
         time.sleep(5)
