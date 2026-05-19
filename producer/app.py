@@ -60,6 +60,7 @@ sqs = boto3.client(
 
 class NotificationRequest(BaseModel):
 
+    eventId: str | None = None
     channel: str
     recipient: str
     message: str
@@ -87,7 +88,7 @@ def create_notification(
     queue_url = response["QueueUrl"]
 
     payload = {
-        "eventId": str(uuid.uuid4()),
+        "eventId": request.eventId or str(uuid.uuid4()),
         "correlationId": str(uuid.uuid4()),
         "channel": request.channel,
         "recipient": request.recipient,

@@ -131,55 +131,6 @@ while True:
         print(f"recipient: {body['recipient']}")
         print(f"message: {body['message']}")
 
-        # =================================================
-        # Validación idempotencia
-        # =================================================
-
-        existing = table.get_item(
-            Key={
-                "eventId": body["eventId"]
-            }
-        )
-
-        # =================================================
-        # Evento duplicado
-        # =================================================
-
-        if "Item" in existing:
-
-            print()
-            print("Evento duplicado detectado")
-            print("Mensaje ignorado")
-
-            table.update_item(
-                Key={
-                    "eventId": body["eventId"]
-                },
-                UpdateExpression="""
-                    SET duplicateCount =
-                    if_not_exists(duplicateCount, :zero) + :inc,
-                    lastDuplicateAt = :timestamp
-                """,
-                ExpressionAttributeValues={
-                    ":inc": 1,
-                    ":zero": 0,
-                    ":timestamp": datetime.utcnow().strftime(
-                        "%Y-%m-%dT%H:%M:%SZ"
-                    )
-                }
-            )
-
-            sqs.delete_message(
-                QueueUrl=queue_url,
-                ReceiptHandle=message["ReceiptHandle"]
-            )
-
-            continue
-
-        # =================================================
-        # Procesamiento normal
-        # =================================================
-
         with tracer.start_as_current_span(
             "worker-process-message"
         ):
@@ -191,21 +142,49 @@ while True:
 
             print("EMAIL enviado correctamente")
 
-            table.put_item(
-                Item={
-                    "eventId": body["eventId"],
-                    "correlationId": body["correlationId"],
-                    "channel": body["channel"],
-                    "status": "PROCESSED",
-                    "duplicateCount": 0,
-                    "createdAt": body["createdAt"],
-                    "processedAt": datetime.utcnow().strftime(
-                        "%Y-%m-%dT%H:%M:%SZ"
-                    )
-                }
-            )
+            try:
 
-            print("Evento almacenado en DynamoDB")
+                table.put_item(
+                    Item={
+                        "eventId": body["eventId"],
+                        "correlationId": body["correlationId"],
+                        "channel": body["channel"],
+                        "status": "PROCESSED",
+                        "duplicateCount": 0,
+                        "createdAt": body["createdAt"],
+                        "processedAt": datetime.utcnow().strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                    },
+                    ConditionExpression=
+                    "attribute_not_exists(eventId)"
+                )
+
+                print("Evento almacenado en DynamoDB")
+
+            except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+
+                print()
+                print("Evento duplicado detectado")
+                print("Mensaje ignorado")
+
+                table.update_item(
+                    Key={
+                        "eventId": body["eventId"]
+                    },
+                    UpdateExpression="""
+                        SET duplicateCount =
+                        if_not_exists(duplicateCount, :zero) + :inc,
+                        lastDuplicateAt = :timestamp
+                    """,
+                    ExpressionAttributeValues={
+                        ":inc": 1,
+                        ":zero": 0,
+                        ":timestamp": datetime.utcnow().strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                    }
+                )
 
             sqs.delete_message(
                 QueueUrl=queue_url,
