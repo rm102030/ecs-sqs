@@ -1,0 +1,10 @@
+lab/
+ ├── docker-compose.yml
+ ├── producer/
+ │    ├── app.py
+ │    └── Dockerfile
+ ├── worker/
+ │    ├── worker.py
+ │    └── Dockerfile
+ └── otel/
+      └── otel-collector-config.yaml
