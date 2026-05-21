@@ -71,12 +71,17 @@ while True:
         subprocess.run([
             "docker",
             "compose",
+            "-p",
+            "lab_notificaciones",
             "-f",
             "/workspace/docker-compose.yml",
             "up",
+            "--no-build",
+            "--no-deps",
             "--scale",
             f"worker={desired_scale}",
-            "-d"
+            "-d",
+            "worker"
         ])
 
         current_scale = desired_scale

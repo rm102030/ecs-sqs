@@ -8,7 +8,6 @@ services:
 
   localstack:
     image: localstack/localstack:latest
-    container_name: localstack
 
     ports:
       - "4566:4566"
@@ -32,7 +31,6 @@ services:
 
   dynamodb-local:
     image: amazon/dynamodb-local
-    container_name: dynamodb-local
 
     ports:
       - "8000:8000"
@@ -170,8 +168,6 @@ services:
 
   autoscaler:
     build: ./autoscaler
-
-    container_name: autoscaler
 
     working_dir: /workspace
 
