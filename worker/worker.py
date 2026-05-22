@@ -5,10 +5,15 @@ import boto3
 from datetime import datetime
 
 from opentelemetry import trace
+from opentelemetry.propagate import extract
+
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+    OTLPSpanExporter
+)
 
 # =========================================================
 # OpenTelemetry
@@ -106,7 +111,8 @@ while True:
         messages = sqs.receive_message(
             QueueUrl=queue_url,
             MaxNumberOfMessages=1,
-            WaitTimeSeconds=5
+            WaitTimeSeconds=5,
+            MessageAttributeNames=["All"]
         )
 
         if "Messages" not in messages:
@@ -114,6 +120,7 @@ while True:
             print("No hay mensajes disponibles")
 
             continue
+        
 
         message = messages["Messages"][0]
 
@@ -121,19 +128,60 @@ while True:
             message["Body"]
         )
 
+        # =====================================================
+        # TRACE CONTEXT EXTRACTION
+        # =====================================================
+
+        carrier = {}
+
+        attributes = message.get(
+            "MessageAttributes",
+            {}
+        )
+
+        if "traceparent" in attributes:
+
+            carrier["traceparent"] = attributes[
+                "traceparent"
+            ]["StringValue"]
+
         print()
         print("==============================")
-        print("MENSAJE RECIBIDO")
+        print("TRACE CONTEXT")
         print("==============================")
-        print(f"eventId: {body['eventId']}")
-        print(f"correlationId: {body['correlationId']}")
-        print(f"channel: {body['channel']}")
-        print(f"recipient: {body['recipient']}")
-        print(f"message: {body['message']}")
+        print(carrier)
+
+        ctx = extract(carrier)
+
+        # =====================================================
+        # PROCESS MESSAGE
+        # =====================================================
 
         with tracer.start_as_current_span(
-            "worker-process-message"
-        ):
+            "worker-process-message",
+            context=ctx
+        ) as span:
+
+            trace_id = format(
+                span.get_span_context().trace_id,
+                "032x"
+            )
+
+            print()
+            print("==============================")
+            print("TRACE PROPAGADO")
+            print("==============================")
+            print(f"traceId: {trace_id}")
+
+            print()
+            print("==============================")
+            print("MENSAJE RECIBIDO")
+            print("==============================")
+            print(f"eventId: {body['eventId']}")
+            print(f"correlationId: {body['correlationId']}")
+            print(f"channel: {body['channel']}")
+            print(f"recipient: {body['recipient']}")
+            print(f"message: {body['message']}")
 
             print()
             print("Procesando EMAIL provider...")
@@ -154,13 +202,21 @@ while True:
                         "createdAt": body["createdAt"],
                         "processedAt": datetime.utcnow().strftime(
                             "%Y-%m-%dT%H:%M:%SZ"
-                        )
+                        ),
+                        "traceId": trace_id,
+                        "service": "worker-service"
                     },
                     ConditionExpression=
                     "attribute_not_exists(eventId)"
                 )
 
-                print("Evento almacenado en DynamoDB")
+                print()
+                print("==============================")
+                print("EVENTO ALMACENADO")
+                print("==============================")
+                print(f"eventId: {body['eventId']}")
+                print("service: worker-service")
+                print(f"traceId: {trace_id}")
 
             except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
 
@@ -191,12 +247,15 @@ while True:
                 ReceiptHandle=message["ReceiptHandle"]
             )
 
+            print()
             print("Mensaje eliminado de SQS")
 
     except Exception as e:
 
         print()
+        print("==============================")
         print("ERROR EN WORKER")
+        print("==============================")
         print(e)
 
         time.sleep(5)
