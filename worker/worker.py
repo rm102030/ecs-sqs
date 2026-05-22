@@ -4,6 +4,11 @@ import boto3
 
 from datetime import datetime
 
+from prometheus_client import (
+    Counter,
+    start_http_server
+)
+
 from opentelemetry import trace
 from opentelemetry.propagate import extract
 
@@ -14,6 +19,30 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter
 )
+
+# =========================================================
+# Prometheus Metrics
+# =========================================================
+
+processed_counter = Counter(
+    "notifications_processed_total",
+    "Total processed notifications"
+)
+
+duplicate_counter = Counter(
+    "notifications_duplicate_total",
+    "Total duplicate notifications"
+)
+
+error_counter = Counter(
+    "notifications_worker_errors_total",
+    "Total worker processing errors"
+)
+
+# Metrics endpoint
+start_http_server(8002)
+
+print("Prometheus metrics available on port 8002")
 
 # =========================================================
 # OpenTelemetry
@@ -64,9 +93,45 @@ dynamodb = boto3.resource(
 
 print("Cliente DynamoDB creado")
 
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://localstack:4566",
+    region_name="us-east-1",
+    aws_access_key_id="test",
+    aws_secret_access_key="test"
+)
+
+print("Cliente S3 creado")
+
 table = dynamodb.Table(
     "notifications-idempotency"
 )
+
+# =========================================================
+# S3 Historical Storage
+# =========================================================
+
+def save_to_s3(status, payload):
+
+    key = (
+        f"{status.lower()}/"
+        f"{datetime.utcnow().strftime('%Y/%m/%d/')}"
+        f"{payload['eventId']}.json"
+    )
+
+    s3.put_object(
+        Bucket="notifications-history",
+        Key=key,
+        Body=json.dumps(payload),
+        ContentType="application/json"
+    )
+
+    print()
+    print("==============================")
+    print("EVENTO GUARDADO EN S3")
+    print("==============================")
+    print(f"bucket: notifications-history")
+    print(f"key: {key}")
 
 # =========================================================
 # Queue URL
@@ -120,7 +185,6 @@ while True:
             print("No hay mensajes disponibles")
 
             continue
-        
 
         message = messages["Messages"][0]
 
@@ -210,6 +274,8 @@ while True:
                     "attribute_not_exists(eventId)"
                 )
 
+                processed_counter.inc()
+
                 print()
                 print("==============================")
                 print("EVENTO ALMACENADO")
@@ -218,7 +284,29 @@ while True:
                 print("service: worker-service")
                 print(f"traceId: {trace_id}")
 
+                # =============================================
+                # SAVE SUCCESS TO S3
+                # =============================================
+
+                save_payload = {
+                    "eventId": body["eventId"],
+                    "correlationId": body["correlationId"],
+                    "channel": body["channel"],
+                    "status": "SUCCESS",
+                    "processedAt": datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                    "traceId": trace_id
+                }
+
+                save_to_s3(
+                    "SUCCESS",
+                    save_payload
+                )
+
             except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+
+                duplicate_counter.inc()
 
                 print()
                 print("Evento duplicado detectado")
@@ -252,10 +340,32 @@ while True:
 
     except Exception as e:
 
+        error_counter.inc()
+
         print()
         print("==============================")
         print("ERROR EN WORKER")
         print("==============================")
         print(e)
+
+        try:
+
+            error_payload = {
+                "error": str(e),
+                "timestamp": datetime.utcnow().strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+            }
+
+            save_to_s3(
+                "FAILED",
+                error_payload
+            )
+
+        except Exception as s3_error:
+
+            print()
+            print("ERROR GUARDANDO FAILED EN S3")
+            print(s3_error)
 
         time.sleep(5)

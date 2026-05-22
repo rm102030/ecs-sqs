@@ -13,11 +13,12 @@ services:
       - "4566:4566"
 
     environment:
-      - SERVICES=sqs
+      - SERVICES=sqs,s3
       - DEBUG=1
 
     volumes:
       - "./init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh"
+      - "./lifecycle.json:/etc/localstack/init/ready.d/lifecycle.json"
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
@@ -171,12 +172,75 @@ services:
 
     working_dir: /workspace
 
-    volumes:
-      - ./:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
-
     depends_on:
       localstack:
         condition: service_healthy
+
+    restart: unless-stopped
+
+  # =========================================================
+  # Prometheus
+  # =========================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+
+    ports:
+      - "9090:9090"
+
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+
+    depends_on:
+      - producer
+      - worker
+
+  # =========================================================
+  # Grafana
+  # =========================================================
+
+  grafana:
+    image: grafana/grafana:latest
+
+    ports:
+      - "3000:3000"
+
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+
+    depends_on:
+      - prometheus
+      - jaeger
+      - loki
+
+  # =========================================================
+  # Loki
+  # =========================================================
+
+  loki:
+    image: grafana/loki:latest
+
+    ports:
+      - "3100:3100"
+
+    command: -config.file=/etc/loki/local-config.yaml
+
+  # =========================================================
+  # Promtail
+  # =========================================================
+
+  promtail:
+    image: grafana/promtail:latest
+
+    command: -config.file=/etc/promtail/config.yml
+
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./observability/promtail.yml:/etc/promtail/config.yml
+
+    depends_on:
+      - loki
 
     restart: unless-stopped

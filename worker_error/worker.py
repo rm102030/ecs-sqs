@@ -5,16 +5,13 @@ import socket
 
 from datetime import datetime
 
+from prometheus_client import (
+    Counter,
+    start_http_server
+)
+
 from opentelemetry import trace
-
-from opentelemetry.context import (
-    attach,
-    detach
-)
-
-from opentelemetry.propagate import (
-    extract
-)
+from opentelemetry.propagate import extract
 
 from opentelemetry.sdk.resources import (
     Resource
@@ -36,6 +33,35 @@ from opentelemetry.trace import (
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter
 )
+
+# =========================================================
+# Prometheus Metrics
+# =========================================================
+
+failed_counter = Counter(
+    "notifications_failed_total",
+    "Total failed notifications"
+)
+
+retry_counter = Counter(
+    "notifications_retry_total",
+    "Total retry attempts"
+)
+
+dlq_counter = Counter(
+    "notifications_dlq_total",
+    "Total DLQ notifications"
+)
+
+worker_error_counter = Counter(
+    "notifications_worker_error_total",
+    "Total worker internal errors"
+)
+
+# Metrics endpoint
+start_http_server(8003)
+
+print("Prometheus metrics available on port 8003")
 
 # =========================================================
 # OpenTelemetry
@@ -104,9 +130,50 @@ dynamodb = boto3.resource(
 
 print("Cliente DynamoDB creado")
 
+s3 = boto3.client(
+
+    "s3",
+
+    endpoint_url="http://localstack:4566",
+
+    region_name="us-east-1",
+
+    aws_access_key_id="test",
+
+    aws_secret_access_key="test"
+)
+
+print("Cliente S3 creado")
+
 table = dynamodb.Table(
     "notifications-idempotency"
 )
+
+# =========================================================
+# S3 Historical Storage
+# =========================================================
+
+def save_to_s3(status, payload):
+
+    key = (
+        f"{status.lower()}/"
+        f"{datetime.utcnow().strftime('%Y/%m/%d/')}"
+        f"{payload['eventId']}.json"
+    )
+
+    s3.put_object(
+        Bucket="notifications-history",
+        Key=key,
+        Body=json.dumps(payload),
+        ContentType="application/json"
+    )
+
+    print()
+    print("==============================")
+    print("EVENTO GUARDADO EN S3")
+    print("==============================")
+    print(f"bucket: notifications-history")
+    print(f"key: {key}")
 
 # =========================================================
 # Worker Metadata
@@ -171,6 +238,8 @@ while True:
 
         if not messages:
 
+            print("No hay mensajes ERROR disponibles")
+
             continue
 
         for message in messages:
@@ -196,18 +265,6 @@ while True:
             print(carrier)
 
             ctx = extract(carrier)
-
-            token = attach(ctx)
-
-            incoming_trace_id = carrier[
-                "traceId"
-            ]
-
-            print()
-            print("==============================")
-            print("TRACE PROPAGADO")
-            print("==============================")
-            print(f"traceId: {incoming_trace_id}")
 
             body = json.loads(
                 message["Body"]
@@ -238,6 +295,17 @@ while True:
                 "worker-error-process-message",
                 context=ctx
             ) as span:
+
+                trace_id = format(
+                    span.get_span_context().trace_id,
+                    "032x"
+                )
+
+                print()
+                print("==============================")
+                print("TRACE PROPAGADO")
+                print("==============================")
+                print(f"traceId: {trace_id}")
 
                 print()
                 print("==============================")
@@ -281,6 +349,8 @@ while True:
                         0
                     ) + 1
 
+                retry_counter.inc()
+
                 # ==============================================
                 # Persistir estado FAILED
                 # ==============================================
@@ -290,75 +360,78 @@ while True:
                 if retry_count >= MAX_RETRIES:
                     status_value = "DLQ"
 
+                item = {
+
+                    # =====================================
+                    # Evento
+                    # =====================================
+
+                    "eventId":
+                    body["eventId"],
+
+                    "correlationId":
+                    body["correlationId"],
+
+                    "channel":
+                    body["channel"],
+
+                    # =====================================
+                    # Estado
+                    # =====================================
+
+                    "status":
+                    status_value,
+
+                    "retryCount":
+                    retry_count,
+
+                    "terminalFailure":
+                    retry_count >= MAX_RETRIES,
+
+                    # =====================================
+                    # Observabilidad
+                    # =====================================
+
+                    "service":
+                    "worker-error-service",
+
+                    "workerId":
+                    worker_id,
+
+                    "traceId":
+                    trace_id,
+
+                    "errorType":
+                    "SimulatedProcessingFailure",
+
+                    # =====================================
+                    # Fechas
+                    # =====================================
+
+                    "createdAt":
+                    body["createdAt"],
+
+                    "failedAt":
+                    datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+
+                    "lastFailedAt":
+                    datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+
+                    "dlqAt":
+                    datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ) if retry_count >= MAX_RETRIES else "N/A"
+                }
+
                 table.put_item(
-
-                    Item={
-
-                        # =====================================
-                        # Evento
-                        # =====================================
-
-                        "eventId":
-                        body["eventId"],
-
-                        "correlationId":
-                        body["correlationId"],
-
-                        "channel":
-                        body["channel"],
-
-                        # =====================================
-                        # Estado
-                        # =====================================
-
-                        "status":
-                        status_value,
-
-                        "retryCount":
-                        retry_count,
-
-                        "terminalFailure":
-                        retry_count >= MAX_RETRIES,
-
-                        # =====================================
-                        # Observabilidad
-                        # =====================================
-
-                        "service":
-                        "worker-error-service",
-
-                        "workerId":
-                        worker_id,
-
-                        "traceId":
-                        incoming_trace_id,
-
-                        "errorType":
-                        "SimulatedProcessingFailure",
-
-                        # =====================================
-                        # Fechas
-                        # =====================================
-
-                        "createdAt":
-                        body["createdAt"],
-
-                        "failedAt":
-                        datetime.utcnow().strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        ),
-
-                        "lastFailedAt":
-                        datetime.utcnow().strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        ),
-
-                        "dlqAt":
-                        datetime.utcnow().strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        ) if retry_count >= MAX_RETRIES else "N/A"
-                    }
+                    Item=item
                 )
+
+                failed_counter.inc()
 
                 print()
                 print("==============================")
@@ -382,7 +455,7 @@ while True:
 
                 print(
                     f"traceId: "
-                    f"{incoming_trace_id}"
+                    f"{trace_id}"
                 )
 
                 print(
@@ -391,10 +464,34 @@ while True:
                 )
 
                 # ==============================================
+                # SAVE FAILED TO S3
+                # ==============================================
+
+                save_payload = {
+                    "eventId": body["eventId"],
+                    "correlationId": body["correlationId"],
+                    "channel": body["channel"],
+                    "status": status_value,
+                    "retryCount": retry_count,
+                    "traceId": trace_id,
+                    "workerId": worker_id,
+                    "failedAt": datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    )
+                }
+
+                save_to_s3(
+                    status_value,
+                    save_payload
+                )
+
+                # ==============================================
                 # Manual DLQ handling
                 # ==============================================
 
                 if retry_count >= MAX_RETRIES:
+
+                    dlq_counter.inc()
 
                     print()
                     print("==============================")
@@ -456,9 +553,9 @@ while True:
                     "Simulated processing failure"
                 )
 
-            detach(token)
-
     except Exception as e:
+
+        worker_error_counter.inc()
 
         print()
         print("==============================")

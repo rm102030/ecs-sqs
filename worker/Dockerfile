@@ -8,6 +8,7 @@ RUN pip install \
     boto3 \
     opentelemetry-sdk \
     opentelemetry-api \
-    opentelemetry-exporter-otlp
+    opentelemetry-exporter-otlp \
+    prometheus-client
 
 CMD ["python", "-u", "worker.py"]

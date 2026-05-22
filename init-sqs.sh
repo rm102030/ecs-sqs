@@ -52,3 +52,9 @@ awslocal sqs create-queue \
   --queue-name notifications-error \
   --attributes "{\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"$ERROR_DLQ_ARN\\\",\\\"maxReceiveCount\\\":\\\"3\\\"}\"}"
 
+awslocal s3 mb s3://notifications-history
+
+awslocal s3api put-bucket-lifecycle-configuration \
+  --bucket notifications-history \
+  --lifecycle-configuration \
+  file:///etc/localstack/init/ready.d/lifecycle.json

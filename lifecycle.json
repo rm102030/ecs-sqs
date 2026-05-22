@@ -1,0 +1,26 @@
+{
+  "Rules": [
+    {
+      "ID": "success-cleanup",
+
+      "Prefix": "success/",
+
+      "Status": "Enabled",
+
+      "Expiration": {
+        "Days": 1
+      }
+    },
+    {
+      "ID": "failed-cleanup",
+
+      "Prefix": "failed/",
+
+      "Status": "Enabled",
+
+      "Expiration": {
+        "Days": 7
+      }
+    }
+  ]
+}
