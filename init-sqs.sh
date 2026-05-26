@@ -9,6 +9,8 @@ echo "Inicializando SQS..."
 awslocal sqs create-queue \
   --queue-name notifications-dlq
 
+awslocal s3 mb s3://notifications-history || true  
+
 # ==========================================
 # Obtener ARN DLQ
 # ==========================================
