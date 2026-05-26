@@ -9,4 +9,6 @@ RUN apk add --no-cache \
 
 RUN pip3 install boto3 --break-system-packages
 
-CMD ["python3", "-u", "autoscaler/autoscaler.py"]
+COPY . .
+
+CMD ["python3", "-u", "autoscaler.py"]

@@ -5,16 +5,22 @@ services:
   # =========================================================
   # LOCALSTACK
   # =========================================================
-
   localstack:
-    image: localstack/localstack:4.4.0
+    image: localstack/localstack:latest
 
     ports:
       - "4566:4566"
 
     environment:
       - SERVICES=sqs,s3
-      - DEBUG=1
+      - DEBUG=0
+
+    logging:
+      driver: "json-file"
+
+      options:
+        max-size: "10m"
+        max-file: "3"
 
     volumes:
       - "./init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh"
@@ -25,6 +31,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+    restart: unless-stopped
 
   # =========================================================
   # DYNAMODB LOCAL
@@ -136,9 +144,6 @@ services:
   worker:
     build: ./worker
 
-    ports:
-      - "8002:8002"
-
     depends_on:
       localstack:
         condition: service_healthy
@@ -189,6 +194,12 @@ services:
 
     working_dir: /workspace
 
+    command: python3 -u autoscaler.py
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.yml:/workspace/docker-compose.yml
+
     depends_on:
       localstack:
         condition: service_healthy
@@ -227,15 +238,17 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      
+
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards  
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
 
     depends_on:
       - prometheus
       - jaeger
       - loki
+
+    restart: unless-stopped
 
   # =========================================================
   # LOKI

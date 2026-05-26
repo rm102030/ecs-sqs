@@ -1,5 +1,6 @@
 import json
 import time
+import socket
 import boto3
 
 from datetime import datetime
@@ -26,22 +27,33 @@ from providers.provider_factory import (
 )
 
 # =========================================================
+# WORKER ID
+# =========================================================
+
+WORKER_ID = socket.gethostname()
+
+print(f"Worker iniciado: {WORKER_ID}")
+
+# =========================================================
 # Prometheus Metrics
 # =========================================================
 
 processed_counter = Counter(
     "notifications_processed_total",
-    "Total processed notifications"
+    "Total processed notifications",
+    ["worker"]
 )
 
 duplicate_counter = Counter(
     "notifications_duplicate_total",
-    "Total duplicate notifications"
+    "Total duplicate notifications",
+    ["worker"]
 )
 
 error_counter = Counter(
     "notifications_worker_errors_total",
-    "Total worker processing errors"
+    "Total worker processing errors",
+    ["worker"]
 )
 
 # =========================================================
@@ -77,7 +89,8 @@ processor = BatchSpanProcessor(
     OTLPSpanExporter(
         endpoint="http://otel-collector:4317",
         insecure=True
-    )
+    ),
+    max_export_batch_size=32
 )
 
 provider.add_span_processor(processor)
@@ -376,7 +389,9 @@ while True:
                     "attribute_not_exists(eventId)"
                 )
 
-                processed_counter.inc()
+                processed_counter.labels(
+                    worker=WORKER_ID
+                ).inc()
 
                 print()
                 print("==============================")
@@ -386,10 +401,6 @@ while True:
                 print(f"eventId: {body['eventId']}")
                 print("service: worker-service")
                 print(f"traceId: {trace_id}")
-
-                # =============================================
-                # SAVE SUCCESS TO S3
-                # =============================================
 
                 save_payload = {
                     "eventId": body["eventId"],
@@ -419,7 +430,9 @@ while True:
 
             except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
 
-                duplicate_counter.inc()
+                duplicate_counter.labels(
+                    worker=WORKER_ID
+                ).inc()
 
                 print()
                 print("Evento duplicado detectado")
@@ -457,7 +470,9 @@ while True:
 
     except Exception as e:
 
-        error_counter.inc()
+        error_counter.labels(
+            worker=WORKER_ID
+        ).inc()
 
         print()
         print("==============================")

@@ -43,4 +43,4 @@ print("Prometheus metrics available on port 8005")
 # =========================================================
 
 resource = Resource.create({
-    "service.name": "worker-dlq"
+    "service.name": "worker-dlq" })
