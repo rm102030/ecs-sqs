@@ -1,0 +1,80 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "title": "Processed Notifications",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(notifications_processed_total[1m])"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "datasource": "Prometheus",
+      "title": "Worker Errors",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(notifications_worker_errors_total[1m])"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "datasource": "Prometheus",
+      "title": "Processing Latency P95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(notification_processing_seconds_bucket[5m]))"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "datasource": "Prometheus",
+      "title": "Provider Latency P95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(provider_request_seconds_bucket[5m]))"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
+    }
+  ],
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "notifications",
+    "observability"
+  ],
+  "title": "Notifications Overview",
+  "version": 1
+}
