@@ -3,7 +3,7 @@ version: "3.9"
 services:
 
   # =========================================================
-  # LocalStack
+  # LOCALSTACK
   # =========================================================
 
   localstack:
@@ -27,26 +27,35 @@ services:
       retries: 10
 
   # =========================================================
-  # DynamoDB Local
+  # DYNAMODB LOCAL
   # =========================================================
 
   dynamodb-local:
     image: amazon/dynamodb-local
+
+    container_name: lab_notificaciones-dynamodb-local-1
 
     ports:
       - "8000:8000"
 
     command: "-jar DynamoDBLocal.jar -sharedDb"
 
+    healthcheck:
+      test: ["CMD-SHELL", "echo healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # =========================================================
-  # Init DynamoDB
+  # INIT DYNAMODB
   # =========================================================
 
   init-dynamodb:
     image: amazon/aws-cli
 
     depends_on:
-      - dynamodb-local
+      dynamodb-local:
+        condition: service_started
 
     environment:
       AWS_ACCESS_KEY_ID: test
@@ -57,7 +66,7 @@ services:
       - /bin/sh
       - -c
       - |
-        sleep 15
+        sleep 10
 
         aws dynamodb create-table \
           --table-name notifications-idempotency \
@@ -68,7 +77,7 @@ services:
           --region us-east-1 || true
 
   # =========================================================
-  # Jaeger
+  # JAEGER
   # =========================================================
 
   jaeger:
@@ -82,7 +91,7 @@ services:
       - "14250:14250"
 
   # =========================================================
-  # OpenTelemetry Collector
+  # OTEL COLLECTOR
   # =========================================================
 
   otel-collector:
@@ -102,7 +111,7 @@ services:
       - jaeger
 
   # =========================================================
-  # Producer API
+  # PRODUCER
   # =========================================================
 
   producer:
@@ -121,7 +130,7 @@ services:
     restart: unless-stopped
 
   # =========================================================
-  # Worker Principal
+  # WORKER
   # =========================================================
 
   worker:
@@ -132,12 +141,12 @@ services:
         condition: service_healthy
 
       init-dynamodb:
-        condition: service_started
+        condition: service_completed_successfully
 
     restart: unless-stopped
 
   # =========================================================
-  # Worker Error
+  # WORKER ERROR
   # =========================================================
 
   worker_error:
@@ -148,12 +157,12 @@ services:
         condition: service_healthy
 
       init-dynamodb:
-        condition: service_started
+        condition: service_completed_successfully
 
     restart: unless-stopped
 
   # =========================================================
-  # Worker DLQ
+  # WORKER DLQ
   # =========================================================
 
   worker_dlq:
@@ -164,12 +173,12 @@ services:
         condition: service_healthy
 
       init-dynamodb:
-        condition: service_started
+        condition: service_completed_successfully
 
     restart: unless-stopped
 
   # =========================================================
-  # Autoscaler
+  # AUTOSCALER
   # =========================================================
 
   autoscaler:
@@ -184,7 +193,7 @@ services:
     restart: unless-stopped
 
   # =========================================================
-  # Prometheus
+  # PROMETHEUS
   # =========================================================
 
   prometheus:
@@ -203,7 +212,7 @@ services:
       - worker_dlq
 
   # =========================================================
-  # Grafana
+  # GRAFANA
   # =========================================================
 
   grafana:
@@ -222,7 +231,7 @@ services:
       - loki
 
   # =========================================================
-  # Loki
+  # LOKI
   # =========================================================
 
   loki:
@@ -234,7 +243,7 @@ services:
     command: -config.file=/etc/loki/local-config.yaml
 
   # =========================================================
-  # Promtail
+  # PROMTAIL
   # =========================================================
 
   promtail:

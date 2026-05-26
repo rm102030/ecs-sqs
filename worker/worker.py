@@ -6,6 +6,7 @@ from datetime import datetime
 
 from prometheus_client import (
     Counter,
+    Histogram,
     start_http_server
 )
 
@@ -18,6 +19,10 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter
+)
+
+from providers.provider_factory import (
+    send_notification
 )
 
 # =========================================================
@@ -37,6 +42,20 @@ duplicate_counter = Counter(
 error_counter = Counter(
     "notifications_worker_errors_total",
     "Total worker processing errors"
+)
+
+# =========================================================
+# Histogram Metrics
+# =========================================================
+
+processing_latency = Histogram(
+    "notification_processing_seconds",
+    "Notification processing latency"
+)
+
+provider_latency = Histogram(
+    "provider_request_seconds",
+    "Provider request latency"
 )
 
 # Metrics endpoint
@@ -92,6 +111,59 @@ dynamodb = boto3.resource(
 )
 
 print("Cliente DynamoDB creado")
+
+# =========================================================
+# CREATE DYNAMODB TABLE IF NOT EXISTS
+# =========================================================
+
+try:
+
+    existing_tables = dynamodb.meta.client.list_tables()
+
+    if "notifications-idempotency" not in existing_tables["TableNames"]:
+
+        print()
+        print("==============================")
+        print("CREANDO TABLA DYNAMODB")
+        print("==============================")
+
+        dynamodb.create_table(
+
+            TableName="notifications-idempotency",
+
+            KeySchema=[
+                {
+                    "AttributeName": "eventId",
+                    "KeyType": "HASH"
+                }
+            ],
+
+            AttributeDefinitions=[
+                {
+                    "AttributeName": "eventId",
+                    "AttributeType": "S"
+                }
+            ],
+
+            BillingMode="PAY_PER_REQUEST"
+        )
+
+        print("Tabla notifications-idempotency creada")
+
+    else:
+
+        print()
+        print("==============================")
+        print("TABLA DYNAMODB EXISTE")
+        print("==============================")
+
+except Exception as e:
+
+    print()
+    print("==============================")
+    print("ERROR CREANDO TABLA DYNAMODB")
+    print("==============================")
+    print(e)
 
 s3 = boto3.client(
     "s3",
@@ -221,6 +293,8 @@ while True:
         # PROCESS MESSAGE
         # =====================================================
 
+        processing_start = time.time()
+
         with tracer.start_as_current_span(
             "worker-process-message",
             context=ctx
@@ -241,18 +315,36 @@ while True:
             print("==============================")
             print("MENSAJE RECIBIDO")
             print("==============================")
+
             print(f"eventId: {body['eventId']}")
             print(f"correlationId: {body['correlationId']}")
             print(f"channel: {body['channel']}")
             print(f"recipient: {body['recipient']}")
             print(f"message: {body['message']}")
 
+            # =================================================
+            # PROVIDER LAYER
+            # =================================================
+
             print()
-            print("Procesando EMAIL provider...")
+            print("==============================")
+            print("PROVIDER LAYER")
+            print("==============================")
 
-            time.sleep(2)
+            provider_start = time.time()
 
-            print("EMAIL enviado correctamente")
+            provider_response = send_notification(body)
+
+            provider_latency.observe(
+                time.time() - provider_start
+            )
+
+            print()
+            print("==============================")
+            print("PROVIDER RESPONSE")
+            print("==============================")
+
+            print(provider_response)
 
             try:
 
@@ -268,7 +360,17 @@ while True:
                             "%Y-%m-%dT%H:%M:%SZ"
                         ),
                         "traceId": trace_id,
-                        "service": "worker-service"
+                        "service": "worker-service",
+                        "provider": provider_response.get(
+                            "provider"
+                        ),
+                        "providerStatus": provider_response.get(
+                            "status"
+                        ),
+                        "providerMessageId": provider_response.get(
+                            "providerMessageId",
+                            "N/A"
+                        )
                     },
                     ConditionExpression=
                     "attribute_not_exists(eventId)"
@@ -280,6 +382,7 @@ while True:
                 print("==============================")
                 print("EVENTO ALMACENADO")
                 print("==============================")
+
                 print(f"eventId: {body['eventId']}")
                 print("service: worker-service")
                 print(f"traceId: {trace_id}")
@@ -296,7 +399,17 @@ while True:
                     "processedAt": datetime.utcnow().strftime(
                         "%Y-%m-%dT%H:%M:%SZ"
                     ),
-                    "traceId": trace_id
+                    "traceId": trace_id,
+                    "provider": provider_response.get(
+                        "provider"
+                    ),
+                    "providerStatus": provider_response.get(
+                        "status"
+                    ),
+                    "providerMessageId": provider_response.get(
+                        "providerMessageId",
+                        "N/A"
+                    )
                 }
 
                 save_to_s3(
@@ -338,6 +451,10 @@ while True:
             print()
             print("Mensaje eliminado de SQS")
 
+            processing_latency.observe(
+                time.time() - processing_start
+            )
+
     except Exception as e:
 
         error_counter.inc()
@@ -346,11 +463,13 @@ while True:
         print("==============================")
         print("ERROR EN WORKER")
         print("==============================")
+
         print(e)
 
         try:
 
             error_payload = {
+                "eventId": "worker-error",
                 "error": str(e),
                 "timestamp": datetime.utcnow().strftime(
                     "%Y-%m-%dT%H:%M:%SZ"

@@ -2,7 +2,7 @@ FROM python:3.11
 
 WORKDIR /app
 
-COPY worker.py .
+COPY . .
 
 RUN pip install \
     boto3 \
