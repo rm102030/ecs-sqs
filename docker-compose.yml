@@ -7,7 +7,7 @@ services:
   # =========================================================
 
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:4.4.0
 
     ports:
       - "4566:4566"
@@ -135,6 +135,9 @@ services:
 
   worker:
     build: ./worker
+
+    ports:
+      - "8002:8002"
 
     depends_on:
       localstack:
