@@ -1,3 +1,4 @@
+
 version: "3.9"
 
 services:
@@ -5,8 +6,9 @@ services:
   # =========================================================
   # LOCALSTACK
   # =========================================================
+
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:4.4.0
 
     ports:
       - "4566:4566"
@@ -14,6 +16,8 @@ services:
     environment:
       - SERVICES=sqs,s3
       - DEBUG=0
+      - EAGER_SERVICE_LOADING=1
+      - AWS_DEFAULT_REGION=us-east-1
 
     logging:
       driver: "json-file"
@@ -22,10 +26,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-    volumes:
-      - "./init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh"
-      - "./lifecycle.json:/etc/localstack/init/ready.d/lifecycle.json"
-
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
@@ -33,6 +33,34 @@ services:
       retries: 10
 
     restart: unless-stopped
+
+  # =========================================================
+  # INIT LOCALSTACK
+  # =========================================================
+
+  init-localstack:
+    image: localstack/localstack:4.4.0
+
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+
+    volumes:
+      - ./init-sqs.sh:/init-sqs.sh
+      - ./lifecycle.json:/lifecycle.json
+
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        chmod +x /init-sqs.sh
+        sleep 15
+        /init-sqs.sh
 
   # =========================================================
   # DYNAMODB LOCAL
@@ -135,6 +163,9 @@ services:
       localstack:
         condition: service_healthy
 
+      init-localstack:
+        condition: service_completed_successfully
+
     restart: unless-stopped
 
   # =========================================================
@@ -147,6 +178,9 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+
+      init-localstack:
+        condition: service_completed_successfully
 
       init-dynamodb:
         condition: service_completed_successfully
@@ -164,6 +198,9 @@ services:
       localstack:
         condition: service_healthy
 
+      init-localstack:
+        condition: service_completed_successfully
+
       init-dynamodb:
         condition: service_completed_successfully
 
@@ -179,6 +216,9 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+
+      init-localstack:
+        condition: service_completed_successfully
 
       init-dynamodb:
         condition: service_completed_successfully
@@ -203,6 +243,9 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+
+      init-localstack:
+        condition: service_completed_successfully
 
     restart: unless-stopped
 
@@ -280,3 +323,4 @@ services:
       - loki
 
     restart: unless-stopped
+

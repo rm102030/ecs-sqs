@@ -1,3 +1,4 @@
+
 import json
 import time
 import boto3
@@ -35,27 +36,39 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
 )
 
 # =========================================================
+# Worker Metadata
+# =========================================================
+
+WORKER_ID = socket.gethostname()
+
+print(f"Worker ID: {WORKER_ID}")
+
+# =========================================================
 # Prometheus Metrics
 # =========================================================
 
 failed_counter = Counter(
     "notifications_failed_total",
-    "Total failed notifications"
+    "Total failed notifications",
+    ["worker"]
 )
 
 retry_counter = Counter(
     "notifications_retry_total",
-    "Total retry attempts"
+    "Total retry attempts",
+    ["worker"]
 )
 
 dlq_counter = Counter(
     "notifications_dlq_total",
-    "Total DLQ notifications"
+    "Total DLQ notifications",
+    ["worker"]
 )
 
 worker_error_counter = Counter(
     "notifications_worker_error_total",
-    "Total worker internal errors"
+    "Total worker internal errors",
+    ["worker"]
 )
 
 # Metrics endpoint
@@ -101,49 +114,28 @@ tracer = trace.get_tracer(
 print("Iniciando worker-error...")
 
 sqs = boto3.client(
-
     "sqs",
-
     endpoint_url="http://localstack:4566",
-
     region_name="us-east-1",
-
     aws_access_key_id="test",
-
     aws_secret_access_key="test"
 )
-
-print("Cliente SQS creado")
 
 dynamodb = boto3.resource(
-
     "dynamodb",
-
     endpoint_url="http://dynamodb-local:8000",
-
     region_name="us-east-1",
-
     aws_access_key_id="test",
-
     aws_secret_access_key="test"
 )
-
-print("Cliente DynamoDB creado")
 
 s3 = boto3.client(
-
     "s3",
-
     endpoint_url="http://localstack:4566",
-
     region_name="us-east-1",
-
     aws_access_key_id="test",
-
     aws_secret_access_key="test"
 )
-
-print("Cliente S3 creado")
 
 table = dynamodb.Table(
     "notifications-idempotency"
@@ -168,20 +160,9 @@ def save_to_s3(status, payload):
         ContentType="application/json"
     )
 
-    print()
-    print("==============================")
-    print("EVENTO GUARDADO EN S3")
-    print("==============================")
-    print(f"bucket: notifications-history")
-    print(f"key: {key}")
-
 # =========================================================
-# Worker Metadata
+# Config
 # =========================================================
-
-worker_id = socket.gethostname()
-
-print(f"Worker ID: {worker_id}")
 
 MAX_RETRIES = 3
 
@@ -221,13 +202,9 @@ while True:
     try:
 
         response = sqs.receive_message(
-
             QueueUrl=queue_url,
-
             MaxNumberOfMessages=1,
-
             WaitTimeSeconds=5,
-
             MessageAttributeNames=["All"]
         )
 
@@ -237,16 +214,9 @@ while True:
         )
 
         if not messages:
-
-            print("No hay mensajes ERROR disponibles")
-
             continue
 
         for message in messages:
-
-            # =====================================================
-            # OpenTelemetry Context Extraction
-            # =====================================================
 
             carrier = {}
 
@@ -258,38 +228,22 @@ while True:
                     "StringValue"
                 ]
 
-            print()
-            print("==============================")
-            print("TRACE CONTEXT")
-            print("==============================")
-            print(carrier)
-
             ctx = extract(carrier)
 
             body = json.loads(
                 message["Body"]
             )
 
-            # =====================================================
-            # SOLO mensajes ERROR
-            # =====================================================
-
             if body.get("channel") != "ERROR":
 
                 sqs.delete_message(
-
                     QueueUrl=queue_url,
-
                     ReceiptHandle=message[
                         "ReceiptHandle"
                     ]
                 )
 
                 continue
-
-            # =====================================================
-            # CONTINÚA TRACE ORIGINAL
-            # =====================================================
 
             with tracer.start_as_current_span(
                 "worker-error-process-message",
@@ -300,36 +254,6 @@ while True:
                     span.get_span_context().trace_id,
                     "032x"
                 )
-
-                print()
-                print("==============================")
-                print("TRACE PROPAGADO")
-                print("==============================")
-                print(f"traceId: {trace_id}")
-
-                print()
-                print("==============================")
-                print("MENSAJE ERROR RECIBIDO")
-                print("==============================")
-
-                print(
-                    f"eventId: "
-                    f"{body.get('eventId')}"
-                )
-
-                print(
-                    f"correlationId: "
-                    f"{body.get('correlationId')}"
-                )
-
-                print(
-                    f"channel: "
-                    f"{body.get('channel')}"
-                )
-
-                # ==============================================
-                # Retry Tracking
-                # ==============================================
 
                 existing = table.get_item(
                     Key={
@@ -349,11 +273,9 @@ while True:
                         0
                     ) + 1
 
-                retry_counter.inc()
-
-                # ==============================================
-                # Persistir estado FAILED
-                # ==============================================
+                retry_counter.labels(
+                    worker=WORKER_ID
+                ).inc()
 
                 status_value = "FAILED"
 
@@ -361,10 +283,6 @@ while True:
                     status_value = "DLQ"
 
                 item = {
-
-                    # =====================================
-                    # Evento
-                    # =====================================
 
                     "eventId":
                     body["eventId"],
@@ -375,10 +293,6 @@ while True:
                     "channel":
                     body["channel"],
 
-                    # =====================================
-                    # Estado
-                    # =====================================
-
                     "status":
                     status_value,
 
@@ -388,25 +302,17 @@ while True:
                     "terminalFailure":
                     retry_count >= MAX_RETRIES,
 
-                    # =====================================
-                    # Observabilidad
-                    # =====================================
-
                     "service":
                     "worker-error-service",
 
                     "workerId":
-                    worker_id,
+                    WORKER_ID,
 
                     "traceId":
                     trace_id,
 
                     "errorType":
                     "SimulatedProcessingFailure",
-
-                    # =====================================
-                    # Fechas
-                    # =====================================
 
                     "createdAt":
                     body["createdAt"],
@@ -431,41 +337,9 @@ while True:
                     Item=item
                 )
 
-                failed_counter.inc()
-
-                print()
-                print("==============================")
-                print("EVENTO FAILED")
-                print("==============================")
-
-                print(
-                    f"eventId: "
-                    f"{body['eventId']}"
-                )
-
-                print(
-                    f"service: "
-                    f"worker-error-service"
-                )
-
-                print(
-                    f"workerId: "
-                    f"{worker_id}"
-                )
-
-                print(
-                    f"traceId: "
-                    f"{trace_id}"
-                )
-
-                print(
-                    f"retryCount: "
-                    f"{retry_count}"
-                )
-
-                # ==============================================
-                # SAVE FAILED TO S3
-                # ==============================================
+                failed_counter.labels(
+                    worker=WORKER_ID
+                ).inc()
 
                 save_payload = {
                     "eventId": body["eventId"],
@@ -474,7 +348,7 @@ while True:
                     "status": status_value,
                     "retryCount": retry_count,
                     "traceId": trace_id,
-                    "workerId": worker_id,
+                    "workerId": WORKER_ID,
                     "failedAt": datetime.utcnow().strftime(
                         "%Y-%m-%dT%H:%M:%SZ"
                     )
@@ -485,18 +359,11 @@ while True:
                     save_payload
                 )
 
-                # ==============================================
-                # Manual DLQ handling
-                # ==============================================
-
                 if retry_count >= MAX_RETRIES:
 
-                    dlq_counter.inc()
-
-                    print()
-                    print("==============================")
-                    print("MOVIENDO A DLQ")
-                    print("==============================")
+                    dlq_counter.labels(
+                        worker=WORKER_ID
+                    ).inc()
 
                     dlq_response = sqs.get_queue_url(
                         QueueName="notifications-error-dlq"
@@ -505,37 +372,21 @@ while True:
                     dlq_url = dlq_response["QueueUrl"]
 
                     sqs.send_message(
-
                         QueueUrl=dlq_url,
-
                         MessageBody=json.dumps(body),
-
                         MessageAttributes=message[
                             "MessageAttributes"
                         ]
                     )
 
                     sqs.delete_message(
-
                         QueueUrl=queue_url,
-
                         ReceiptHandle=message[
                             "ReceiptHandle"
                         ]
                     )
 
-                    print("Mensaje movido a DLQ")
-
                     continue
-
-                # ==============================================
-                # Simulación error
-                # ==============================================
-
-                print()
-                print(
-                    "Simulando error de procesamiento..."
-                )
 
                 span.record_exception(
                     Exception(
@@ -555,13 +406,11 @@ while True:
 
     except Exception as e:
 
-        worker_error_counter.inc()
-
-        print()
-        print("==============================")
-        print("ERROR EN WORKER")
-        print("==============================")
+        worker_error_counter.labels(
+            worker=WORKER_ID
+        ).inc()
 
         print(e)
 
         time.sleep(5)
+

@@ -1,3 +1,4 @@
+
 {
   "annotations": {
     "list": []
@@ -64,6 +65,7 @@
       "targets": [
         {
           "expr": "sum by(worker) (increase(notifications_processed_total[5m]))",
+          "legendFormat": "{{worker}}",
           "refId": "A"
         }
       ],
@@ -120,6 +122,7 @@
       "targets": [
         {
           "expr": "sum by(worker) (rate(notifications_processed_total[30s]) * 60)",
+          "legendFormat": "{{worker}}",
           "refId": "A"
         }
       ],
@@ -176,6 +179,7 @@
       "targets": [
         {
           "expr": "sum by(worker) (rate(notifications_worker_errors_total[1m]))",
+          "legendFormat": "{{worker}}",
           "refId": "A"
         }
       ],
@@ -234,7 +238,6 @@
           "expr": "histogram_quantile(0.95, sum(rate(notification_processing_seconds_bucket[1m])) by (le))",
           "legendFormat": "{{worker}}",
           "refId": "A"
-          
         }
       ],
 
@@ -327,5 +330,6 @@
 
   "title": "Notifications Overview",
 
-  "version": 5
+  "version": 7
 }
+

@@ -1,3 +1,4 @@
+
 global:
   scrape_interval: 15s
 
@@ -14,3 +15,16 @@ scrape_configs:
     static_configs:
       - targets:
           - "worker:8002"
+
+  - job_name: "worker_error"
+
+    static_configs:
+      - targets:
+          - "worker_error:8003"
+
+  - job_name: "worker_dlq"
+
+    static_configs:
+      - targets:
+          - "worker_dlq:8005"
+
